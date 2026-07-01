@@ -160,6 +160,7 @@ class UserCellViewModel: UserCellViewModelProtocol {
         router.navigate(to: user)
     }
 }
+
 struct UserCellView<ViewModel: UserCellViewModelProtocol>: View {
     @ObservedObject private var viewModel: ViewModel
 
@@ -232,8 +233,51 @@ class UserCellBuilder: UserCellBuildable {
     }
 }
 
+// MARK: - Detail Dependency & Component
+
+@MainActor
+protocol UserDetailDependency {
+    var favoritesService: FavoritesService { get }
+}
+
+@MainActor
+class UserDetailComponent: UserDetailDependency {
+    let favoritesService: FavoritesService
+
+    init(dependency: UserDetailDependency) {
+        self.favoritesService = dependency.favoritesService
+    }
+}
+
+// MARK: - Detail Builder
+
+protocol UserDetailBuildable {
+    associatedtype DetailContent: View
+    @ViewBuilder @MainActor func build(user: User) -> DetailContent
+}
+
+// What UserDetailView can build internally — extend this as the screen grows
+protocol UserDetailContentBuildable {}
+
+@MainActor
+class UserDetailBuilder: UserDetailBuildable, UserDetailContentBuildable {
+    private let component: UserDetailComponent
+
+    init(component: UserDetailComponent) {
+        self.component = component
+    }
+
+    @ViewBuilder func build(user: User) -> some View {
+        let viewModel: some UserDetailViewModelProtocol = UserDetailViewModel(
+            user: user,
+            favoritesService: component.favoritesService
+        )
+        UserDetailView(viewModel: viewModel, builder: self)
+    }
+}
+
 // MARK: - List Dependency & Component
-// UserListComponent conforms to UserCellDependency so it can seed a UserCellComponent
+// UserListComponent conforms to UserCellDependency and UserDetailDependency so it can seed their components
 
 @MainActor
 protocol UserListDependency {
@@ -242,7 +286,7 @@ protocol UserListDependency {
 }
 
 @MainActor
-class UserListComponent: UserListDependency, UserCellDependency {
+class UserListComponent: UserListDependency, UserCellDependency, UserDetailDependency {
     let favoritesService: FavoritesService
     let router: UserRouter
 
@@ -265,6 +309,7 @@ protocol UserListBuildable {
 class UserListBuilder: UserListBuildable {
     private let component: UserListComponent
     private lazy var cellBuilder = UserCellBuilder(component: UserCellComponent(dependency: component))
+    private lazy var detailBuilder = UserDetailBuilder(component: UserDetailComponent(dependency: component))
 
     init(component: UserListComponent) {
         self.component = component
@@ -276,11 +321,7 @@ class UserListBuilder: UserListBuildable {
     }
 
     @ViewBuilder func buildDetail(user: User) -> some View {
-        let viewModel: some UserDetailViewModelProtocol = UserDetailViewModel(
-            user: user,
-            favoritesService: component.favoritesService
-        )
-        UserDetailView(viewModel: viewModel)
+        detailBuilder.build(user: user)
     }
 
     @ViewBuilder func buildCell(user: User, isFavorite: Bool) -> some View {
@@ -290,11 +331,13 @@ class UserListBuilder: UserListBuildable {
 
 // MARK: - Detail View
 
-struct UserDetailView<ViewModel: UserDetailViewModelProtocol>: View {
+struct UserDetailView<ViewModel: UserDetailViewModelProtocol, Builder: UserDetailContentBuildable>: View {
     @ObservedObject private var viewModel: ViewModel
+    private let builder: Builder
 
-    init(viewModel: ViewModel) {
+    init(viewModel: ViewModel, builder: Builder) {
         self.viewModel = viewModel
+        self.builder = builder
     }
 
     var body: some View {
@@ -425,8 +468,9 @@ class PreviewDependency: UserListDependency {
 }
 
 #Preview("Detail") {
-    NavigationStack {
-        UserDetailView(viewModel: MockUserDetailViewModel())
+    struct MockDetailBuilder: UserDetailContentBuildable {}
+    return NavigationStack {
+        UserDetailView(viewModel: MockUserDetailViewModel(), builder: MockDetailBuilder())
     }
 }
 
@@ -434,7 +478,8 @@ class PreviewDependency: UserListDependency {
     UserCellView(
         viewModel: UserCellViewModel(
             user: User(id: UUID(), name: "Alice", email: "alice@example.com"),
-            isFavorite: true
+            isFavorite: true,
+            router: UserRouter()
         )
     )
 }

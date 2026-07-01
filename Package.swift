@@ -7,7 +7,7 @@ import PackageDescription
 // file, and use the Canvas (#Preview) for the live demo.
 let package = Package(
     name: "iOS Conference Indonesia",
-    platforms: [.iOS(.v17)],
+    platforms: [.iOS(.v17), .macOS(.v14)],
     targets: [
         .target(name: "Stage1_MVVM"),
         .target(name: "Stage2_MVVMProtocol"),
