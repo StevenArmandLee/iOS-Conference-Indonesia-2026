@@ -10,6 +10,18 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Component (SMB base)
+// Shared DI base — every screen's Component subclasses this and holds its
+// injected dependency, same as the OutLoud codebase.
+
+open class Component<Dependency> {
+    public let dependency: Dependency
+
+    public init(with dependency: Dependency) {
+        self.dependency = dependency
+    }
+}
+
 struct User: Identifiable, Hashable {
     let id: UUID
     let name: String
@@ -196,13 +208,14 @@ protocol UserCellDependency {
 }
 
 @MainActor
-class UserCellComponent: UserCellDependency {
+class UserCellComponent: Component<UserCellDependency> {
     let favoritesService: FavoritesService
     let router: UserRouter
 
     init(dependency: UserCellDependency) {
         self.favoritesService = dependency.favoritesService
         self.router = dependency.router
+        super.init(with: dependency)
     }
 }
 
@@ -237,14 +250,18 @@ class UserCellBuilder: UserCellBuildable {
 @MainActor
 protocol UserDetailDependency {
     var favoritesService: FavoritesService { get }
+    var cellBuilder: UserCellBuilder { get }
 }
 
 @MainActor
-class UserDetailComponent: UserDetailDependency {
+class UserDetailComponent: Component<UserDetailDependency> {
     let favoritesService: FavoritesService
+    let cellBuilder: UserCellBuilder
 
     init(dependency: UserDetailDependency) {
         self.favoritesService = dependency.favoritesService
+        self.cellBuilder = dependency.cellBuilder
+        super.init(with: dependency)
     }
 }
 
@@ -255,8 +272,12 @@ protocol UserDetailBuildable {
     @ViewBuilder @MainActor func build(user: User) -> DetailContent
 }
 
-// What UserDetailView can build internally — extend this as the screen grows
-protocol UserDetailContentBuildable {}
+// What UserDetailView can build internally — extend this as the screen grows.
+// buildCell lets the detail screen render the *same* cell the list uses.
+protocol UserDetailContentBuildable {
+    associatedtype Cell: View
+    @ViewBuilder @MainActor func buildCell(user: User, isFavorite: Bool) -> Cell
+}
 
 @MainActor
 class UserDetailBuilder: UserDetailBuildable, UserDetailContentBuildable {
@@ -273,6 +294,11 @@ class UserDetailBuilder: UserDetailBuildable, UserDetailContentBuildable {
         )
         UserDetailView(viewModel: viewModel, builder: self)
     }
+
+    // Reuses UserCellView via the *injected* cell builder — no cell UI written here.
+    @ViewBuilder func buildCell(user: User, isFavorite: Bool) -> some View {
+        component.cellBuilder.buildCell(user: user, isFavorite: isFavorite)
+    }
 }
 
 // MARK: - List Dependency & Component
@@ -285,13 +311,15 @@ protocol UserListDependency {
 }
 
 @MainActor
-class UserListComponent: UserListDependency, UserCellDependency, UserDetailDependency {
+class UserListComponent: Component<UserListDependency>, UserCellDependency, UserDetailDependency {
     let favoritesService: FavoritesService
     let router: UserRouter
+    lazy var cellBuilder = UserCellBuilder(component: UserCellComponent(dependency: self))
 
     init(dependency: UserListDependency) {
         self.favoritesService = dependency.favoritesService
         self.router = dependency.router
+        super.init(with: dependency)
     }
 }
 
@@ -307,7 +335,6 @@ protocol UserListBuildable {
 @MainActor
 class UserListBuilder: UserListBuildable {
     private let component: UserListComponent
-    private lazy var cellBuilder = UserCellBuilder(component: UserCellComponent(dependency: component))
     private lazy var detailBuilder = UserDetailBuilder(component: UserDetailComponent(dependency: component))
 
     init(component: UserListComponent) {
@@ -324,7 +351,7 @@ class UserListBuilder: UserListBuildable {
     }
 
     @ViewBuilder func buildCell(user: User, isFavorite: Bool) -> some View {
-        cellBuilder.buildCell(user: user, isFavorite: isFavorite)
+        component.cellBuilder.buildCell(user: user, isFavorite: isFavorite)
     }
 }
 
@@ -473,7 +500,11 @@ struct UserListView<ViewModel: UserViewModelProtocol, Builder: UserListBuildable
 
         func toggleFavorite() { isFavorite.toggle() }
     }
-    struct MockDetailBuilder: UserDetailContentBuildable {}
+    struct MockDetailBuilder: UserDetailContentBuildable {
+        @ViewBuilder func buildCell(user: User, isFavorite: Bool) -> some View {
+            UserCellView(viewModel: UserCellViewModel(user: user, isFavorite: isFavorite, router: UserRouter()))
+        }
+    }
     return NavigationStack {
         UserDetailView(viewModel: MockUserDetailViewModel(), builder: MockDetailBuilder())
     }
